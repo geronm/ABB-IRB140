@@ -64,19 +64,26 @@ def resampleJointPlanCubicSpline(joint_cmd, resample_utime_step):
     times_old = np.array([cmd.utime for cmd in joint_cmd])
     start_time = joint_cmd[0].utime
     end_time = joint_cmd[-1].utime
-    times_new = np.arange(start_time, end_time+resample_utime_step, resample_utime_step)
+    if end_time <= start_time:
+        print "Invalid plan times coming in:", times_old
+        return None, None
+
+    times_new = np.arange(start_time, end_time, resample_utime_step)
+    times_new = np.append(times_new, [end_time])
+    print "times: ", start_time, end_time, times_new
     joint_pos_resampled = []
     joint_times_resampled = []
     try:
         joints_pos_new = []
         for joint in range(len(joint_cmd[0].pos)): #For each joint, construct spline-interpolation
             joint_pos_old = np.array([cmd.pos[joint] for cmd in joint_cmd])
-            cubespline = interpolate.splrep(times_old, joint_pos_old, s=0)
+            cubespline = interpolate.splrep(times_old, joint_pos_old, s=0)    
             joints_pos_new.append(interpolate.splev(times_new, cubespline, der=0))
         joint_pos_resampled = [[joints_pos_new[joint][t] \
                                   for joint in range(len(joint_cmd[0].pos))] \
                                   for t in range(len(times_new))] #Rearrange into a list of joint pos's
     except TypeError as e: # Gives an error if the data can't be spline-interpolated; try linear instead
+        print "Caught TypeError in resampleJointPlanCubicSpline: ", e
         joints_pos_new = []
         for joint in range(len(joint_cmd[0].pos)): #For each joint, construct spline-interpolation
             joint_pos_old = np.array([cmd.pos[joint] for cmd in joint_cmd])
@@ -95,7 +102,7 @@ def convertACH_Command(msg):
 class abbIRB140LCMWrapper:
     
     def __init__(self):
-        self.robot = abb.Robot(verbose=True) #Robot Connection to openABB, input Robot's IP if needed.
+        self.robot = abb.Robot(verbose=True, speed=[40,20,20,20])# speed=[100, 50, 50, 50]) #Robot Connection to openABB, input Robot's IP if needed.
         self.robot.setJointPosBufferFTSetpoint()
         self.logger = abb.Logger(verbose=False)
         self.lc = lcm.LCM("udpm://239.255.76.67:7667?ttl=1")
@@ -109,16 +116,19 @@ class abbIRB140LCMWrapper:
         msg = abb_irb140joint_plan.decode(data)
 
         plan_pos, plan_times = resampleJointPlanCubicSpline(msg.joint_cmd, self.resample_utime_step)
-        # Add pos to buffer
-        self.robot.clearJointPosBuffer()
-        self.robot.addJointPosBuffer(plan_pos[0])
-        for i in range(1, len(plan_pos)):
-            # Set move time before calling addJointPosBuffer
-            #self.robot.setMoveTime(plan_times[i-1])
+
+        if plan_pos and plan_times:
             # Add pos to buffer
-            self.robot.addJointPosBuffer(plan_pos[i])
-        self.robot.executeJointPosBufferWithFT()
-        self.robot.clearJointPosBuffer()
+            self.robot.clearJointPosBuffer()
+            self.robot.addJointPosBuffer(plan_pos[0])
+            for i in range(1, len(plan_pos)):
+                # Set move time before calling addJointPosBuffer
+                #self.robot.setMoveTime(plan_times[i-1])
+                # Add pos to buffer
+                self.robot.addJointPosBuffer(plan_pos[i])
+            self.robot.executeJointPosBufferWithFT()
+#            self.robot.executeJointPosBuffer()
+            self.robot.clearJointPosBuffer()
 
     def command_handler(self,channel,data):
         print "receive command"
